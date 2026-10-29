@@ -76,6 +76,12 @@ button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .ih img{width:26px;height:26px}
 .ih b{font:400 14px var(--f-display);letter-spacing:.04em;flex:1}
 #info p{margin:2px 0 6px;font-size:13px}
+#cont{white-space:pre-line}
+.xbtn.q{right:38px;top:7px;width:24px;height:24px;border:1px solid var(--line);border-radius:50%;font:600 13px var(--f-mono);color:var(--amber)}
+.xbtn.q.on{background:rgba(242,169,59,.18);border-color:var(--amber)}
+.about{max-height:34vh;overflow:auto;margin:4px 0 6px;padding:6px 8px;background:rgba(255,255,255,.04);border-radius:4px;font-size:12.5px;touch-action:pan-y}
+.about p{margin:0 0 4px}.about ul{margin:0 0 4px;padding-left:18px}.about li{margin:2px 0}
+#info input{width:90px;box-sizing:border-box;min-height:34px;padding:4px 8px;background:#222b28;color:var(--ink);border:1px solid var(--line);border-radius:4px;font:500 14px var(--f-mono);-webkit-user-select:text;user-select:text}
 .costs{display:flex;flex-wrap:wrap;gap:6px}
 .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:3px;padding:2px 7px 2px 4px;font:500 12px var(--f-mono);font-variant-numeric:tabular-nums}
 .chip img{width:16px;height:16px}
@@ -157,9 +163,10 @@ button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
         <li>Телефон: два пальца двигают и масштабируют карту. Курсором тяни карту одним пальцем.</li>
         <li>Клик курсором по жиле добывает руду вручную.</li>
         <li>Мышь: <kbd>ЛКМ</kbd> строить и выбирать, <kbd>ПКМ</kbd> или перетаскивание курсором двигает карту, колесо меняет масштаб.</li>
-        <li>Клавиши: <kbd>1</kbd>–<kbd>8</kbd> постройки, <kbd>R</kbd> повернуть, <kbd>X</kbd> снос, <kbd>Q</kbd> курсор, <kbd>WASD</kbd> камера.</li>
+        <li>Клавиши: <kbd>1</kbd>–<kbd>9</kbd> и <kbd>0</kbd> постройки, <kbd>R</kbd> повернуть, <kbd>X</kbd> снос, <kbd>Q</kbd> курсор, <kbd>WASD</kbd> камера.</li>
       </ul>
       <p id="perk"></p>
+      <p id="cloudst" class="dim" style="font-size:12px;margin:6px 0"></p>
       <button id="resetBtn" class="linkbtn">Начать заново</button>
     </section>
     <div id="toast" hidden></div>
@@ -195,6 +202,8 @@ const BT={
   conveyor:{name:'Конвейер',cost:{iron_ore:1},unlock:1,desc:'Везёт предметы. Тяни по карте, и линия ляжет сама. R поворачивает.'},
   drill:{name:'Бур',cost:{iron_ore:8},unlock:1,desc:'Ставится на жилу. Жилы бесконечные, бур не выдыхается. Отдаёт добытое в соседние конвейеры и машины.'},
   splitter:{name:'Распределитель',cost:{iron_ore:3},unlock:1,desc:'Раскидывает входящие предметы по трём другим сторонам по кругу.'},
+  sorter:{name:'Сортировщик',cost:{iron_ore:5},unlock:2,desc:'Выбранный предмет идёт вперёд, остальные в стороны. Режим: только X или всё кроме X.'},
+  teleporter:{name:'Телепорт',cost:{iron_plate:10,copper_plate:10},unlock:3,desc:'Предмет, поданный в телепорт, появляется в другом телепорте того же канала. Канал выбирается кликом.'},
   smelter:{name:'Плавильня',cost:{iron_ore:20},unlock:2,desc:'Руда становится пластиной. Нужно 40 кВт.'},
   generator:{name:'Генератор',cost:{iron_ore:15,coal:5},unlock:2,desc:'Сжигает уголь и даёт 120 кВт. Подай уголь конвейером или буром вплотную.'},
   pole:{name:'Столб',cost:{iron_ore:2},unlock:2,desc:'Собирает сеть: машины в 3 клетках, другие столбы в 6. Соседние здания тоже делят сеть.'},
@@ -255,6 +264,8 @@ function addBld(type,x,y,dir,extra){
     case 'conveyor': b.items=[]; break;
     case 'drill': b.res=resAt(x,y); b.prog=0; b.out=0; b.active=false; break;
     case 'splitter': b.buf=null; break;
+    case 'teleporter': b.ch=0; b.out=[]; b.k=0; break;
+    case 'sorter': b.buf=null; b.mode='only'; b.filter=null; break;
     case 'smelter': b.inv={iron_ore:0,copper_ore:0}; b.cur=null; b.prog=0; b.out=[]; b.want=false; b.sat=0; break;
     case 'assembler': b.recipe='gear'; b.inv={}; b.cur=false; b.prog=0; b.out=[]; b.want=false; b.sat=0; break;
     case 'generator': b.coal=0; b.burn=0; b.fuel=false; b.lit=false; break;
@@ -284,6 +295,7 @@ function refundInv(b){
   if(b.inv) for(const k in b.inv) add(k,b.inv[k]);
   if(Array.isArray(b.out)) for(const t of b.out) add(t,1);
   if(b.coal) add('coal',b.coal);
+  if(b.buf) add(b.buf.type,1);
   if(typeof b.cur==='string') add(b.cur,1);
 }
 function removeBld(b){
@@ -319,7 +331,7 @@ function give(t,type,fx,fy){
       for(const it of t.items) if(Math.abs(it.t-et)<SP) return false;
       t.items.push({type,t:et}); t.items.sort((a,b)=>b.t-a.t); return true;
     }
-    case 'splitter': if(t.buf) return false; t.buf={type,fx,fy}; return true;
+    case 'splitter': case 'sorter': if(t.buf) return false; t.buf={type,fx,fy}; return true;
     case 'smelter':
       if(type!=='iron_ore'&&type!=='copper_ore') return false;
       if(t.inv[type]>=5) return false; t.inv[type]++; return true;
@@ -328,6 +340,11 @@ function give(t,type,fx,fy){
       if(!(type in r.in)) return false;
       if((t.inv[type]||0)>=r.in[type]*2) return false;
       t.inv[type]=(t.inv[type]||0)+1; return true;
+    }
+    case 'teleporter':{
+      const ps=G.blds.filter(p=>p.type==='teleporter'&&p!==t&&p.ch===t.ch&&p.out.length<4);
+      if(!ps.length) return false;
+      ps[(t.k++)%ps.length].out.push(type); return true;
     }
     case 'generator': if(type!=='coal'||t.coal>=5) return false; t.coal++; return true;
   }
@@ -366,6 +383,15 @@ function updSplitter(b){
     if(n&&give(n,b.buf.type,b.x,b.y)){ b.rr=(d+1)&3; b.buf=null; return; }
   }
 }
+function updSorter(b){
+  if(!b.buf) return;
+  const {type,fx,fy}=b.buf, hit=b.filter?((type===b.filter)===(b.mode==='only')):true;
+  const tryD=d=>{const nx=b.x+DIRS[d][0],ny=b.y+DIRS[d][1]; if(nx===fx&&ny===fy) return false;
+    const n=bldAt(nx,ny); if(n&&give(n,type,b.x,b.y)){b.buf=null;return true;} return false;};
+  if(hit){tryD(b.dir);return;}
+  for(let i=0;i<4;i++){const d=(b.rr+i)&3; if(d===b.dir) continue; if(tryD(d)){b.rr=(d+1)&3;return;}}
+}
+function updTele(b){ if(b.out.length&&pushOut(b,b.out[0])) b.out.shift(); }
 function updSmelter(b,dt,sat,mul){
   b.sat=sat;
   if(b.out.length&&pushOut(b,b.out[0])) b.out.shift();
@@ -446,6 +472,8 @@ function step(dt){
       case 'conveyor': updConveyor(b,dt,mul); break;
       case 'drill': updDrill(b,dt,mul); break;
       case 'splitter': updSplitter(b); break;
+      case 'sorter': updSorter(b); break;
+      case 'teleporter': updTele(b); break;
       case 'smelter': updSmelter(b,dt,b.net.sat,mul); break;
       case 'assembler': updAssembler(b,dt,b.net.sat,mul); break;
       case 'generator': updGenerator(b,dt,b.net); break;
@@ -460,7 +488,7 @@ function resetWorld(){
 }
 function serialize(){
   return {v:1,level:G.level,delivered:G.delivered,stock:G.stock,
-    blds:G.blds.filter(b=>b.type!=='hub').map(b=>({t:b.type,x:b.x,y:b.y,d:b.dir,r:b.recipe}))};
+    blds:G.blds.filter(b=>b.type!=='hub').map(b=>({t:b.type,x:b.x,y:b.y,d:b.dir,r:b.recipe,f:b.filter,m:b.mode,c:b.ch}))};
 }
 function loadState(s){
   resetWorld();
@@ -471,10 +499,13 @@ function loadState(s){
     if(G.occ.has(key(o.x,o.y))) continue;
     const b=addBld(o.t,o.x,o.y,(o.d|0)&3);
     if(b.type==='assembler'&&RECIPES[o.r]) b.recipe=o.r;
+    if(b.type==='teleporter') b.ch=Math.max(0,Math.min(999998,o.c|0));
+    if(b.type==='sorter'){ if(ITEMS[o.f]) b.filter=o.f; if(o.m==='except') b.mode='except'; }
   }
 }
 //#SIM-END
 // ===== Rendering =====
+const chColor=n=>'hsl('+Math.round((n*137.508)%360)+',70%,62%)';
 const PAL={conv:'#3c4a46',convEdge:'#566a64',drill:'#d19a2e',splitter:'#78a6a3',smelter:'#c85d43',gen:'#dcc43c',pole:'#d3dad5',asm:'#4f93b6',hub:'#f2a93b'};
 const RESBG={iron_ore:'rgba(141,162,184,.2)',copper_ore:'rgba(207,122,67,.24)',coal:'rgba(0,0,0,.34)'};
 function rr(c,x,y,w,h,r){c.beginPath();if(c.roundRect)c.roundRect(x,y,w,h,r);else c.rect(x,y,w,h);}
@@ -530,6 +561,22 @@ function drawBld(c,b,x,y,s,t){
       c.strokeStyle=PAL.splitter; c.lineWidth=lw*1.6; c.lineCap='round'; c.beginPath();
       for(const [dx,dy] of DIRS){c.moveTo(cx,cy);c.lineTo(cx+dx*s*0.3,cy+dy*s*0.3);}
       c.stroke(); c.fillStyle=PAL.splitter; c.beginPath(); c.arc(cx,cy,s*0.1,0,TAU); c.fill(); break;
+    }
+    case 'teleporter':{
+      const col=chColor(b.ch|0); body('#14262e',col);
+      c.strokeStyle=col; c.lineWidth=lw*1.5;
+      for(let i=0;i<2;i++){const r=s*(0.14+0.1*i)+s*0.04*Math.sin(t*3+i*2);c.globalAlpha=0.9-0.3*i;c.beginPath();c.arc(cx,cy,r,0,TAU);c.stroke();}
+      c.globalAlpha=1; c.fillStyle=col; c.font='500 '+(s*(String((b.ch|0)+1).length>3?0.17:0.26))+'px "IBM Plex Mono",monospace'; c.textAlign='center'; c.textBaseline='middle';
+      c.fillText(String((b.ch|0)+1),cx,cy+s*0.02); break;
+    }
+    case 'sorter':{
+      body('#2a2233','#b57ad6');
+      c.save(); c.translate(cx,cy); c.rotate((b.dir||0)*Math.PI/2);
+      c.strokeStyle='#b57ad6'; c.lineWidth=lw*1.6; c.lineCap='round'; c.lineJoin='round'; c.beginPath();
+      c.moveTo(-s*0.3,0); c.lineTo(s*0.3,0); c.moveTo(s*0.12,-s*0.14); c.lineTo(s*0.3,0); c.lineTo(s*0.12,s*0.14); c.stroke(); c.restore();
+      if(b.filter){ drawItem(c,b.filter,cx,cy-s*0.22,s*0.13);
+        if(b.mode==='except'){c.strokeStyle='#ee6a55';c.lineWidth=lw*1.5;c.beginPath();c.moveTo(cx-s*0.18,cy-s*0.4);c.lineTo(cx+s*0.18,cy-s*0.04);c.stroke();} }
+      break;
     }
     case 'smelter':{
       body('#4a2a24',PAL.smelter);
@@ -613,7 +660,7 @@ function resize(){
 }
 const toTile=(px,py)=>[Math.floor((px-W/2)/cam.z+cam.x),Math.floor((py-H/2)/cam.z+cam.y)];
 function zoomAt(px,py,f){
-  const nz=Math.max(16,Math.min(96,cam.z*f));
+  const nz=Math.max(5,Math.min(96,cam.z*f));
   const wx=(px-W/2)/cam.z+cam.x, wy=(py-H/2)/cam.z+cam.y;
   cam.z=nz; cam.x=wx-(px-W/2)/cam.z; cam.y=wy-(py-H/2)/cam.z;
 }
@@ -659,7 +706,7 @@ function draw(now){
   }
   // items on belts
   for(const b of vis){
-    if(b.type!=='conveyor') continue;
+    if(b.type!=='conveyor'||S<9) continue;
     const [dx,dy]=DIRS[b.dir];
     for(const it of b.items) drawItem(c,it.type,(b.x+0.5+dx*(it.t-0.5))*S+ox,(b.y+0.5+dy*(it.t-0.5))*S+oy,S*0.17);
   }
@@ -701,12 +748,12 @@ const $=id=>document.getElementById(id);
 const TOOLS=[
   {id:'select',name:'Курсор',key:'Q'},
   {id:'conveyor',key:'1'},{id:'drill',key:'2'},{id:'splitter',key:'3'},{id:'smelter',key:'4'},
-  {id:'generator',key:'5'},{id:'pole',key:'6'},{id:'assembler',key:'7'},{id:'solar',key:'8'},
+  {id:'generator',key:'5'},{id:'pole',key:'6'},{id:'assembler',key:'7'},{id:'solar',key:'8'},{id:'sorter',key:'9'},{id:'teleporter',key:'0'},
   {id:'erase',name:'Снос',key:'X'}
 ];
 const SVG_SELECT='<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M9 5l14 9-6 1.5L19.5 24l-3 1.2-2.6-8.4L9 21z"/></svg>';
 const SVG_ERASE='<svg viewBox="0 0 32 32" fill="none" stroke="#ee6a55" stroke-width="3" stroke-linecap="round"><path d="M9 9l14 14M23 9L9 23"/></svg>';
-let hintOff=false, infoLive=null, toastTimer=0, hudSig='';
+let aboutOpen=false, lastTch=0, hintOff=false, infoLive=null, toastTimer=0, hudSig='';
 
 function toast(msg,kind){
   const el=$('toast'); el.textContent=msg; el.className=kind||''; el.hidden=false;
@@ -760,10 +807,42 @@ function statusOf(b){
     case 'solar': return 'Даёт '+SOLAR_KW+' кВт';
     case 'pole': return 'Узел сети';
     case 'splitter': return 'Раздаёт по сторонам';
+    case 'sorter': return 'Сортирует';
+    case 'teleporter':{const n=G.blds.filter(p=>p.type==='teleporter'&&p!==b&&p.ch===b.ch).length; return 'Канал '+(b.ch+1)+(n?', связан с телепортов: '+n:', нет пары в этом канале');}
     case 'conveyor': return 'Предметов на ленте: '+b.items.length;
     case 'hub': return 'Уровень '+G.level;
   }
   return '';
+}
+function contents(b){
+  const cnt=a=>{const m={};a.forEach(t=>m[t]=(m[t]||0)+1);return m;};
+  const fmt=m=>Object.keys(m).filter(k=>m[k]>0).map(k=>ITEMS[k].name+' ×'+m[k]).join(', ');
+  let parts=[];
+  if(b.inv){const x=fmt(b.inv); if(x) parts.push('Внутри: '+x);}
+  if(b.cur&&typeof b.cur==='string') parts.push('В работе: '+ITEMS[b.cur].name);
+  if(Array.isArray(b.out)&&b.out.length) parts.push('На выходе: '+fmt(cnt(b.out)));
+  if(b.type==='drill') parts.push('В буфере: '+b.out+' / 2');
+  if(b.type==='generator') parts.push('Угля: '+b.coal+' / 5');
+  if(b.type==='conveyor'&&b.items.length) parts.push('На ленте: '+fmt(cnt(b.items.map(i=>i.type))));
+  if(b.buf) parts.push('Держит: '+ITEMS[b.buf.type].name);
+  if(b.type==='sorter') parts.push(b.filter?(b.mode==='only'?'Вперёд только: ':'Вперёд всё кроме: ')+ITEMS[b.filter].name:'Фильтр не выбран, всё идёт вперёд');
+  return parts.join('\n')||'Пусто';
+}
+const ABOUT={
+  conveyor:['Принимает: любые предметы сзади и с боков.','Выдаёт: вперёд, в сторону стрелок.','Скорость: около '+(CONV_SPEED/SP).toFixed(1)+' предм. в сек.'],
+  drill:['Принимает: ничего, ставится только на жилу.','Выдаёт: добытую руду в соседние конвейеры и машины по кругу.','Скорость: '+DRILL_RATE+' в сек, жила бесконечная. Клик по жиле добывает руду вручную.'],
+  splitter:['Принимает: любые предметы с любой стороны.','Выдаёт: по кругу в три остальные стороны, обратно не отдаёт.','Если один выход занят, предмет уходит в другой.'],
+  sorter:['Принимает: любые предметы с любой стороны.','Выдаёт: подходящие предметы вперёд (стрелка), остальные в стороны.','Режим «Только» пускает вперёд один выбранный предмет, «Всё кроме» пускает вперёд всё, кроме выбранного. Без фильтра всё идёт вперёд.'],
+  smelter:['Принимает: железную и медную руду, до 5 каждой.','Выдаёт: железные и медные пластины в соседние здания.','Питание: '+KW.smelter+' кВт. Плавка: '+SMELT_TIME+' с.'],
+  generator:['Принимает: уголь, до 5 штук.','Даёт: '+GEN_KW+' кВт в сеть. Горит только когда есть нагрузка.','Одна порция угля горит '+GEN_BURN+' с при полной нагрузке.'],
+  pole:['Соединяет здания в одну сеть питания.','Машины в 3 клетках, другие столбы в 6.','Соседние здания тоже делят сеть без столба.'],
+  assembler:['Принимает: ингредиенты выбранного рецепта.','Выдаёт: готовое изделие в соседние здания.','Питание: '+KW.assembler+' кВт. Рецепт выбирается кнопками ниже.'],
+  solar:['Даёт: '+SOLAR_KW+' кВт без топлива.','Ничего не принимает и не выдаёт.'],
+  teleporter:['Принимает: любые предметы.','Выдаёт: в телепорт с тем же номером канала, он выставляет предмет в соседнее здание.','Если в канале несколько телепортов, предметы идут по кругу. Без пары предметы не принимаются.']
+};
+function aboutHtml(b){
+  const d=BT[b.type], cost=Object.keys(d.cost).map(k=>ITEMS[k].name+' ×'+d.cost[k]).join(', ');
+  return '<p>'+d.desc+'</p><ul>'+(ABOUT[b.type]||[]).map(x=>'<li>'+x+'</li>').join('')+'</ul>'+(cost?'<p class="dim">Стоимость: '+cost+'</p>':'');
 }
 function netText(b){
   if(!b.net) return '';
@@ -781,22 +860,31 @@ function renderInfo(){
   }
   if(sel&&sel.type!=='hub'&&G.blds.includes(sel)){
     const b=sel, d=BT[b.type];
-    let h='<button class="xbtn" data-act="close" aria-label="Закрыть">×</button><div class="ih"><img alt="" src="'+bldIcon(b.type)+'"><b>'+d.name+'</b></div>';
+    let h='<button class="xbtn" data-act="close" aria-label="Закрыть">×</button><button class="xbtn q'+(aboutOpen?' on':'')+'" data-act="about" aria-label="Сводка" aria-pressed="'+aboutOpen+'">?</button><div class="ih"><img alt="" src="'+bldIcon(b.type)+'"><b>'+d.name+'</b></div>';
     h+='<p class="st" id="stat"></p>';
+    if(aboutOpen) h+='<div class="about">'+aboutHtml(b)+'</div>';
     if(POWER[b.type]&&b.type!=='pole') h+='<p class="rd" id="pow"></p>'; else if(b.type==='pole') h+='<p class="rd" id="pow"></p>';
     if(b.type==='assembler'){
       h+='<div class="acts">'+Object.keys(RECIPES).map(k=>{const r=RECIPES[k];
         return '<button class="btn rec'+(b.recipe===k?' on':'')+'" data-act="recipe" data-v="'+k+'"><img alt="" src="'+itemIcon(k)+'">'+r.name+'</button>';}).join('')+'</div>';
       h+='<p class="rd" id="rdesc"></p>';
     }
+    if(b.type==='sorter'){
+      h+='<div class="acts"><button class="btn'+(b.mode==='only'?' on':'')+'" data-act="smode" data-v="only">Только</button><button class="btn'+(b.mode==='except'?' on':'')+'" data-act="smode" data-v="except">Всё кроме</button></div><div class="acts">'
+        +Object.keys(ITEMS).map(k=>'<button class="btn rec'+(b.filter===k?' on':'')+'" data-act="sfilter" data-v="'+k+'"><img alt="" src="'+itemIcon(k)+'">'+ITEMS[k].name+'</button>').join('')+'</div>';
+    }
+    if(b.type==='teleporter'){
+      h+='<div class="acts"><button class="btn" data-act="tdec">−</button><input id="tchin" type="number" min="1" max="999999" step="1" value="'+(b.ch+1)+'" aria-label="Номер канала" style="border-left:4px solid '+chColor(b.ch)+'"><button class="btn" data-act="tinc">+</button></div>';
+    }
+    h+='<p class="rd" id="cont"></p>';
     h+='<div class="acts">';
-    if(b.type==='conveyor') h+='<button class="btn" data-act="rotate">Повернуть (R)</button>';
+    if(b.type==='conveyor'||b.type==='sorter') h+='<button class="btn" data-act="rotate">Повернуть (R)</button>';
     if(b.type!=='hub') h+='<button class="btn danger" data-act="remove">Снести</button>';
     h+='</div>';
     if(b.type==='hub') h+='<p class="rd">'+d.desc+'</p>';
     el.innerHTML=h; el.hidden=false;
     infoLive=()=>{
-      $('stat').textContent=statusOf(b);
+      $('stat').textContent=statusOf(b); $('cont').textContent=contents(b);
       const p=$('pow'); if(p) p.textContent=netText(b);
       const rd=$('rdesc'); if(rd){const r=RECIPES[b.recipe]; rd.textContent=Object.keys(r.in).map(k=>r.in[k]+' × '+ITEMS[k].name).join(' + ')+' → '+ITEMS[r.out].name+', '+(r.time/(1+0.1*(G.level-1))).toFixed(1)+' с';}
     };
@@ -808,16 +896,23 @@ $('info').addEventListener('click',e=>{
   const a=e.target.closest('[data-act]'); if(!a) return;
   const act=a.dataset.act;
   if(act==='close') selectBld(null);
+  else if(act==='about'){aboutOpen=!aboutOpen;renderInfo();}
   else if(act==='hint'){hintOff=true;renderInfo();}
   else if(act==='rotate') rotateCmd();
   else if(act==='remove'){if(sel){removeBld(sel);sel=null;renderInfo();}}
   else if(act==='recipe'&&sel){setRecipe(sel,a.dataset.v);renderInfo();}
+  else if((act==='tdec'||act==='tinc')&&sel){sel.ch=Math.max(0,Math.min(999998,sel.ch+(act==='tinc'?1:-1)));lastTch=sel.ch;G.netDirty=true;renderInfo();}
+  else if(act==='smode'&&sel){sel.mode=a.dataset.v;renderInfo();}
+  else if(act==='sfilter'&&sel){sel.filter=sel.filter===a.dataset.v?null:a.dataset.v;renderInfo();}
+});
+$('info').addEventListener('change',e=>{
+  if(e.target.id==='tchin'&&sel&&sel.type==='teleporter'){const v=Math.max(1,Math.min(999999,Math.floor(+e.target.value)||1));sel.ch=v-1;lastTch=sel.ch;renderInfo();}
 });
 $('toolbar').addEventListener('click',e=>{const b=e.target.closest('.tool');if(b)setTool(b.dataset.tool);});
 
 function rotateCmd(){
-  if(tool==='conveyor') rot=(rot+1)&3;
-  else if(sel&&sel.type==='conveyor') sel.dir=(sel.dir+1)&3;
+  if(tool==='conveyor'||tool==='sorter') rot=(rot+1)&3;
+  else if(sel&&(sel.type==='conveyor'||sel.type==='sorter')) sel.dir=(sel.dir+1)&3;
 }
 
 function updateHud(force){
@@ -873,6 +968,7 @@ function buildTo(cell){
       else if(ex.type==='conveyor') ex.dir=dir;
     }else{
       const r=placeBld(tool,cl[0],cl[1],rot); if(!r.ok&&r.reason!=='Клетка занята') failMsg(r);
+      if(r.ok&&tool==='teleporter') r.b.ch=lastTch;
     }
     lastCell=cl;
   }
@@ -935,13 +1031,15 @@ cv.addEventListener('wheel',e=>{
 },{passive:false});
 addEventListener('keydown',e=>{
   if(e.ctrlKey||e.metaKey||e.altKey) return;
+  if(e.target&&e.target.tagName==='INPUT') return;
   keys.add(e.code);
   if(e.repeat) return;
   const c=e.code;
   if(c==='KeyR') rotateCmd();
   else if(c==='KeyQ'||c==='Escape') setTool('select');
   else if(c==='KeyX') setTool('erase');
-  else if(/^Digit[1-8]$/.test(c)) setTool(TOOLS[+c.slice(5)].id);
+  else if(c==='Digit0') setTool('teleporter');
+  else if(/^Digit[1-9]$/.test(c)) setTool(TOOLS[+c.slice(5)].id);
   else if((c==='Delete'||c==='Backspace')&&sel&&tool==='select'){removeBld(sel);sel=null;renderInfo();}
 });
 addEventListener('keyup',e=>keys.delete(e.code));
@@ -970,11 +1068,58 @@ $('resetBtn').addEventListener('click',()=>{
   clearTimeout(resetArmed); resetArmed=0; b.textContent='Начать заново';
   resetWorld(); sel=null; tool='select'; cam.x=0.5; cam.y=0.5; fitStart();
   try{localStorage.removeItem(SAVE_KEY);}catch(_){}
+  lastBody=null; cloudCycle(true,true);
   refreshToolbar(); updateHud(true); renderInfo(); toast('Завод стёрт. Начинай с чистого листа.');
 });
 const SAVE_KEY='bz-endless-factory-v1';
 function save(){
-  try{const s=serialize();s.cam={x:cam.x,y:cam.y,z:cam.z};localStorage.setItem(SAVE_KEY,JSON.stringify(s));}catch(_){}
+  let str=null;
+  try{const s=serialize();s.cam={x:cam.x,y:cam.y,z:cam.z};s.base=baseTs;str=JSON.stringify(s);localStorage.setItem(SAVE_KEY,str);}catch(_){}
+  return str;
+}
+// ===== Облачное сохранение в аккаунте Telegram (Telegram.WebApp.CloudStorage) =====
+// Лимит Telegram: до 4096 символов на значение, поэтому сейв режется на куски. baseTs: время версии из облака, с которой это устройство синхронизировано.
+const TG=window.Telegram&&Telegram.WebApp;
+const CS=(TG&&TG.CloudStorage&&TG.isVersionAtLeast&&TG.isVersionAtLeast('6.9'))?TG.CloudStorage:null;
+const CHUNK=3500;
+let baseTs=0, cloudLast=[], lastBody=null, cloudBusy=false, cloudT=0;
+const csGet=ks=>new Promise(r=>{try{CS.getItems(ks,(e,v)=>r(e?null:v));}catch(_){r(null);}});
+const csSet=(k,v)=>new Promise(r=>{try{CS.setItem(k,v,(e,ok)=>r(!e&&!!ok));}catch(_){r(false);}});
+const csDel=ks=>new Promise(r=>{try{CS.removeItems(ks,()=>r(true));}catch(_){r(false);}});
+function setCloudStatus(ok){
+  const el=$('cloudst'); if(!el) return;
+  el.textContent=!CS?'Облако Telegram доступно, только если открыть игру внутри Telegram. Сейчас сохранение хранится на этом устройстве.'
+    :ok===undefined?'Подключаюсь к облаку Telegram…'
+    :ok?'Сохранение в облаке Telegram включено. Синхронизировано в '+new Date().toLocaleTimeString().slice(0,5)+'.'
+    :'Облако Telegram: нет связи, повторю позже.';
+}
+async function cloudPull(meta){
+  const ks=Array.from({length:meta.n},(_,i)=>'sv'+i), v=await csGet(ks); if(!v) throw new Error('read');
+  const parts=ks.map(k=>v[k]||''), str=parts.join(''); if(str.length!==meta.len) throw new Error('inconsistent');
+  const d=JSON.parse(str); loadState(d);
+  if(d.cam&&Number.isFinite(d.cam.x)&&Number.isFinite(d.cam.y)){cam.x=d.cam.x;cam.y=d.cam.y;cam.z=Math.max(5,Math.min(96,d.cam.z||cam.z));}
+  baseTs=meta.t; cloudLast=parts; lastBody=JSON.stringify(serialize());
+  sel=null; save(); refreshToolbar(); updateHud(true); renderInfo(); toast('Загружено сохранение из облака Telegram');
+}
+async function cloudPush(body){
+  const str=save(); if(!str) throw new Error('save');
+  const parts=[]; for(let i=0;i<str.length;i+=CHUNK) parts.push(str.slice(i,i+CHUNK));
+  for(let i=0;i<parts.length;i++) if(cloudLast[i]!==parts[i]){ if(!await csSet('sv'+i,parts[i])) throw new Error('write'); cloudLast[i]=parts[i]; }
+  const ts=Date.now();
+  if(!await csSet('svm',JSON.stringify({t:ts,n:parts.length,len:str.length}))) throw new Error('write');
+  if(cloudLast.length>parts.length){ await csDel(cloudLast.slice(parts.length).map((_,i)=>'sv'+(parts.length+i))); }
+  cloudLast=parts; baseTs=ts; lastBody=body; save();
+}
+async function cloudCycle(force,overwrite){
+  if(!CS||cloudBusy) return; cloudBusy=true;
+  try{
+    const m=await csGet(['svm']); if(m===null) throw new Error('read');
+    let meta=null; try{meta=m.svm?JSON.parse(m.svm):null;}catch(_){}
+    if(!overwrite&&meta&&meta.t>baseTs) await cloudPull(meta);
+    else{ const body=JSON.stringify(serialize()); if(force||body!==lastBody) await cloudPush(body); }
+    setCloudStatus(true);
+  }catch(_){ setCloudStatus(false); }
+  cloudBusy=false;
 }
 function fitStart(){cam.z=Math.max(26,Math.min(44,W/22));}
 function boot(){
@@ -982,15 +1127,16 @@ function boot(){
   let seen=false;
   try{
     const raw=localStorage.getItem(SAVE_KEY);
-    if(raw){const s=JSON.parse(raw);loadState(s);seen=true;
-      if(s.cam&&Number.isFinite(s.cam.x)&&Number.isFinite(s.cam.y)){cam.x=s.cam.x;cam.y=s.cam.y;cam.z=Math.max(16,Math.min(96,s.cam.z||cam.z));}}
+    if(raw){const s=JSON.parse(raw);loadState(s);seen=true;baseTs=+s.base||0;
+      if(s.cam&&Number.isFinite(s.cam.x)&&Number.isFinite(s.cam.y)){cam.x=s.cam.x;cam.y=s.cam.y;cam.z=Math.max(5,Math.min(96,s.cam.z||cam.z));}}
   }catch(_){resetWorld();}
   buildToolbar(); updateHud(true);
   if(!seen) showPanel('help',true);
   renderInfo();
+  setCloudStatus(CS?undefined:false); cloudCycle(false);
 }
 addEventListener('resize',resize);
-document.addEventListener('visibilitychange',()=>{if(document.hidden)save();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)save(); cloudCycle(false);});
 addEventListener('pagehide',save);
 
 let last=performance.now(), acc=0, uiT=0, saveT=0;
@@ -998,7 +1144,8 @@ function frame(now){
   const dt=Math.min(0.1,(now-last)/1000); last=now; acc+=dt;
   let n=0; while(acc>=STEP&&n<6){step(STEP);acc-=STEP;n++;} if(n===6) acc=0;
   panKeys(dt); draw(now);
-  uiT+=dt; saveT+=dt;
+  uiT+=dt; saveT+=dt; cloudT+=dt;
+  if(cloudT>=20){cloudT=0;cloudCycle(false);}
   if(uiT>=0.25){uiT=0;updateHud(false);if(infoLive)infoLive();}
   if(saveT>=8){saveT=0;save();}
   requestAnimationFrame(frame);
