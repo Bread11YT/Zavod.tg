@@ -141,6 +141,11 @@ button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 #info.mini .costs{gap:4px}
 .tool{padding:4px 2px 3px}
 @media (hover:none){.tool .tk{display:none}.tool.locked .tk{display:block}}
+.iorow{display:flex;gap:16px;margin-top:6px}.iopad{display:grid;grid-template-columns:repeat(3,32px);grid-template-rows:repeat(3,32px);gap:3px}
+.iob{background:#222b28;border:1px solid var(--line);border-radius:4px;padding:0;font:600 14px var(--f-mono);color:var(--dim)}
+.iob.in.on{background:rgba(108,192,139,.25);border-color:var(--good);color:var(--good)}
+.iob.out.on{background:rgba(242,169,59,.22);border-color:var(--amber);color:var(--amber)}
+.iopad img{width:22px;height:22px;place-self:center}
 </style>
 <div id="app">
   <canvas id="map" aria-label="Карта завода"></canvas>
@@ -164,6 +169,8 @@ button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
         <li>Клик курсором по жиле добывает руду вручную.</li>
         <li>Мышь: <kbd>ЛКМ</kbd> строить и выбирать, <kbd>ПКМ</kbd> или перетаскивание курсором двигает карту, колесо меняет масштаб.</li>
         <li>Клавиши: <kbd>1</kbd>–<kbd>9</kbd> и <kbd>0</kbd> постройки, <kbd>R</kbd> повернуть, <kbd>X</kbd> снос, <kbd>Q</kbd> курсор, <kbd>WASD</kbd> камера.</li>
+        <li>Копирование: <kbd>C</kbd> выделение рамкой, затем «Копировать» или «Вырезать». <kbd>V</kbd> вставка, <kbd>R</kbd> поворачивает кусок. На телефоне двигай призрак пальцем и жми «Вставить».</li>
+        <li>У буров, плавилен, сборщиков, телепортов и генераторов в панели выбираются стороны входа и выхода.</li>
       </ul>
       <p id="perk"></p>
       <p id="cloudst" class="dim" style="font-size:12px;margin:6px 0"></p>
@@ -247,6 +254,7 @@ function resAt(x,y){
   return null;
 }
 
+const IOCFG={drill:{out:1},smelter:{in:1,out:1},assembler:{in:1,out:1},teleporter:{in:1,out:1},generator:{in:1}};
 const hooks={levelUp(){}};
 const G={blds:[],occ:new Map(),stock:{},level:1,delivered:{},nets:[],links:[],netDirty:true,nextId:1,time:0,hub:null};
 const key=(x,y)=>x*4194304+y;
@@ -271,6 +279,7 @@ function addBld(type,x,y,dir,extra){
     case 'generator': b.coal=0; b.burn=0; b.fuel=false; b.lit=false; break;
     case 'solar': b.fuel=true; break;
   }
+  const io=IOCFG[type]; if(io){ if(io.out) b.outs=15; if(io.in) b.ins=15; }
   if(extra) Object.assign(b,extra);
   for(const [cx,cy] of cellsOf(b)) G.occ.set(key(cx,cy),b);
   G.blds.push(b); G.netDirty=true;
@@ -322,6 +331,7 @@ function checkLevel(){
 }
 
 function give(t,type,fx,fy){
+  if(t.ins!==undefined){const sx=Math.sign(fx-t.x),sy=Math.sign(fy-t.y),sd=DIRS.findIndex(q=>q[0]===sx&&q[1]===sy); if(sd>=0&&!((t.ins>>sd)&1)) return false;}
   switch(t.type){
     case 'hub': deliver(type); return true;
     case 'conveyor':{
@@ -352,7 +362,7 @@ function give(t,type,fx,fy){
 }
 function pushOut(b,type){
   for(let i=0;i<4;i++){
-    const d=(b.rr+i)&3, n=bldAt(b.x+DIRS[d][0],b.y+DIRS[d][1]);
+    const d=(b.rr+i)&3; if(b.outs!==undefined&&!((b.outs>>d)&1)) continue; const n=bldAt(b.x+DIRS[d][0],b.y+DIRS[d][1]);
     if(n&&n!==b&&give(n,type,b.x,b.y)){ b.rr=(d+1)&3; return true; }
   }
   return false;
@@ -488,7 +498,7 @@ function resetWorld(){
 }
 function serialize(){
   return {v:1,level:G.level,delivered:G.delivered,stock:G.stock,
-    blds:G.blds.filter(b=>b.type!=='hub').map(b=>({t:b.type,x:b.x,y:b.y,d:b.dir,r:b.recipe,f:b.filter,m:b.mode,c:b.ch}))};
+    blds:G.blds.filter(b=>b.type!=='hub').map(b=>({t:b.type,x:b.x,y:b.y,d:b.dir,r:b.recipe,f:b.filter,m:b.mode,c:b.ch,o:b.outs!==15?b.outs:undefined,i:b.ins!==15?b.ins:undefined}))};
 }
 function loadState(s){
   resetWorld();
@@ -501,6 +511,8 @@ function loadState(s){
     if(b.type==='assembler'&&RECIPES[o.r]) b.recipe=o.r;
     if(b.type==='teleporter') b.ch=Math.max(0,Math.min(999998,o.c|0));
     if(b.type==='sorter'){ if(ITEMS[o.f]) b.filter=o.f; if(o.m==='except') b.mode='except'; }
+    if(b.outs!==undefined&&Number.isInteger(o.o)) b.outs=o.o&15;
+    if(b.ins!==undefined&&Number.isInteger(o.i)) b.ins=o.i&15;
   }
 }
 //#SIM-END
@@ -652,7 +664,7 @@ const cv=document.getElementById('map'), ctx=cv.getContext('2d');
 let W=0,H=0,dpr=1;
 const cam={x:0.5,y:0.5,z:42};
 const fx=[];
-let tool='select', rot=0, sel=null, hoverCell=null;
+let tool='select', rot=0, sel=null, hoverCell=null, areaSel=null, clip=null, clipRot=0, lastPT='mouse';
 function resize(){
   dpr=Math.min(window.devicePixelRatio||1,2);
   const r=cv.getBoundingClientRect(); W=r.width; H=r.height;
@@ -702,7 +714,7 @@ function draw(now){
   for(const b of G.blds){
     const off=b.w===3?1:0, px=(b.x-off)*S+ox, py=(b.y-off)*S+oy, z=b.w*S;
     if(px>W||py>H||px+z<0||py+z<0) continue;
-    drawBld(c,b,px,py,S,t); vis.push(b);
+    drawBld(c,b,px,py,S,t); drawIO(c,b,px,py,S,b===sel); vis.push(b);
   }
   // items on belts
   for(const b of vis){
@@ -717,10 +729,16 @@ function draw(now){
     c.strokeRect((sel.x-off)*S+ox+1,(sel.y-off)*S+oy+1,sel.w*S-2,sel.w*S-2); c.setLineDash([]);
     if(sel.type==='pole') rangeBox(c,sel.x,sel.y,S,ox,oy);
   }
+  if(areaSel){
+    const r=areaRect(); c.fillStyle='rgba(90,170,255,.13)'; c.fillRect(r.x0*S+ox,r.y0*S+oy,(r.x1-r.x0+1)*S,(r.y1-r.y0+1)*S);
+    c.strokeStyle='#5aaaff'; c.lineWidth=2; c.setLineDash([6,4]); c.strokeRect(r.x0*S+ox,r.y0*S+oy,(r.x1-r.x0+1)*S,(r.y1-r.y0+1)*S); c.setLineDash([]);
+    c.lineWidth=1.5; for(const b of areaBlds()) c.strokeRect(b.x*S+ox+1,b.y*S+oy+1,S-2,S-2);
+  }
   // ghost
   if(hoverCell){
     const [hx,hy]=hoverCell, px=hx*S+ox, py=hy*S+oy;
-    if(BT[tool]&&tool!=='hub'){
+    if(tool==='paste'){ drawPaste(c,hx,hy,S,ox,oy,t); }
+    else if(BT[tool]&&tool!=='hub'){
       const v=canPlace(tool,hx,hy), ok=v.ok&&unlocked(tool);
       c.globalAlpha=0.7; drawBld(c,{type:tool,dir:rot,recipe:'gear'},px,py,S,t); c.globalAlpha=1;
       if(!ok){c.fillStyle='rgba(238,106,85,.4)';c.fillRect(px,py,S,S);}
@@ -743,15 +761,92 @@ function rangeBox(c,x,y,S,ox,oy){
   const r=POLE_REACH;
   c.fillRect((x-r)*S+ox,(y-r)*S+oy,(2*r+1)*S,(2*r+1)*S); c.strokeRect((x-r)*S+ox,(y-r)*S+oy,(2*r+1)*S,(2*r+1)*S); c.setLineDash([]);
 }
+function drawIO(c,b,x,y,s,force){
+  const io=IOCFG[b.type]; if(!io) return;
+  const mi=io.in&&b.ins!==undefined?b.ins:0, mo=io.out&&b.outs!==undefined?b.outs:0;
+  const si=(force||mi!==15)?mi:0, so=(force||mo!==15)?mo:0; if(!si&&!so) return;
+  for(let d=0;d<4;d++){
+    const hi=(si>>d)&1, ho=(so>>d)&1;
+    for(const k of [0,1]){
+      if(!(k?ho:hi)) continue;
+      c.save(); c.translate(x+s/2,y+s/2); c.rotate(d*Math.PI/2);
+      const tx=s*0.5, ty=(hi&&ho?(k?0.2:-0.2):0)*s, a=s*0.13;
+      c.fillStyle=k?'#f2a93b':'#6cc08b'; c.strokeStyle='rgba(0,0,0,.7)'; c.lineWidth=Math.max(1,s*0.03); c.beginPath();
+      if(k){c.moveTo(tx+a,ty);c.lineTo(tx-a*0.5,ty-a);c.lineTo(tx-a*0.5,ty+a);}
+      else{c.moveTo(tx-a,ty);c.lineTo(tx+a*0.5,ty-a);c.lineTo(tx+a*0.5,ty+a);}
+      c.closePath(); c.fill(); c.stroke(); c.restore();
+    }
+  }
+}
+// ===== Copy / paste =====
+const areaRect=()=>({x0:Math.min(areaSel.x0,areaSel.x1),x1:Math.max(areaSel.x0,areaSel.x1),y0:Math.min(areaSel.y0,areaSel.y1),y1:Math.max(areaSel.y0,areaSel.y1)});
+function areaBlds(){if(!areaSel) return []; const r=areaRect(); return G.blds.filter(b=>b.type!=='hub'&&b.x>=r.x0&&b.x<=r.x1&&b.y>=r.y0&&b.y<=r.y1);}
+const rotM=m=>((m<<1)|(m>>3))&15;
+function sumCost(items){const m={};for(const it of items){const c=BT[it.type].cost;for(const k in c)m[k]=(m[k]||0)+c[k];}return m;}
+function copyArea(cut){
+  const l=areaBlds(); if(!l.length){toast('В рамке нет зданий','bad');return;}
+  const xs=l.map(q=>q.x), ys=l.map(q=>q.y), ax=Math.floor((Math.min(...xs)+Math.max(...xs))/2), ay=Math.floor((Math.min(...ys)+Math.max(...ys))/2);
+  clip={items:l.map(q=>{const o={type:q.type,x:q.x-ax,y:q.y-ay,dir:q.dir};
+    if(q.type==='assembler')o.recipe=q.recipe; if(q.type==='sorter'){o.filter=q.filter;o.mode=q.mode;} if(q.type==='teleporter')o.ch=q.ch;
+    if(q.outs!==undefined)o.outs=q.outs; if(q.ins!==undefined)o.ins=q.ins; return o;})};
+  clipRot=0; const n=l.length; if(cut) for(const q of l) removeBld(q);
+  setTool('paste'); toast((cut?'Вырезано: ':'Скопировано: ')+n+'. Выбери место и вставь.');
+}
+function pasteList(hx,hy){
+  return clip.items.map(it=>{let x=it.x,y=it.y,dir=it.dir|0,outs=it.outs,ins=it.ins;
+    for(let k=0;k<clipRot;k++){const t=x;x=-y;y=t;dir=(dir+1)&3;if(outs!==undefined)outs=rotM(outs);if(ins!==undefined)ins=rotM(ins);}
+    return Object.assign({},it,{x:hx+x,y:hy+y,dir,outs,ins});});
+}
+const pasteOk=it=>unlocked(it.type)&&canPlace(it.type,it.x,it.y).ok;
+function drawPaste(c,hx,hy,S,ox,oy,t){
+  if(!clip) return;
+  for(const it of pasteList(hx,hy)){
+    const px=it.x*S+ox, py=it.y*S+oy;
+    c.globalAlpha=0.65; drawBld(c,it,px,py,S,t); c.globalAlpha=1; drawIO(c,it,px,py,S,false);
+    if(!pasteOk(it)){c.fillStyle='rgba(238,106,85,.45)';c.fillRect(px,py,S,S);}
+  }
+}
+function doPaste(cell){
+  if(!clip||!cell) return;
+  const l=pasteList(cell[0],cell[1]).filter(pasteOk);
+  if(!l.length){toast('Тут нельзя вставить: места заняты','bad');return;}
+  const cost=sumCost(l); if(!canAfford(cost)){toast('Не хватает: '+lacking(cost),'bad');return;}
+  spend(cost,-1);
+  for(const it of l){const ex={};for(const k of ['recipe','filter','mode','ch','outs','ins']) if(it[k]!==undefined) ex[k]=it[k]; addBld(it.type,it.x,it.y,it.dir,ex);}
+  const sk=clip.items.length-l.length; toast('Вставлено: '+l.length+(sk?'. Пропущено: '+sk:''));
+}
+function ioPad(b,k,cls,title){
+  const A=cls==='in'?['◀','▲','▶','▼']:['▶','▼','◀','▲'], pos=[[2,3],[3,2],[2,1],[1,2]];
+  let h='<div class="iobox"><p class="lbl">'+title+'</p><div class="iopad">';
+  for(let d=0;d<4;d++) h+='<button class="iob '+cls+(((b[k]>>d)&1)?' on':'')+'" style="grid-area:'+pos[d][0]+'/'+pos[d][1]+'" data-act="io" data-k="'+k+'" data-v="'+d+'" aria-label="'+title+'">'+A[d]+'</button>';
+  return h+'<img alt="" style="grid-area:2/2" src="'+bldIcon(b.type)+'"></div></div>';
+}
+function renderClipInfo(el){
+  let h='<button class="xbtn" data-act="cancelclip" aria-label="Закрыть">×</button>';
+  if(tool==='area'){
+    if(!areaSel) h+='<p>Протяни рамку по карте, чтобы выделить часть завода.</p>';
+    else{const n=areaBlds().length; h+='<p>Выделено зданий: <b>'+n+'</b></p>';
+      if(n) h+='<div class="acts"><button class="btn" data-act="copy">Копировать</button><button class="btn" data-act="cut">Вырезать</button><button class="btn danger" data-act="delarea">Снести</button></div>';}
+    el.innerHTML=h; el.hidden=false; return;
+  }
+  const cost=sumCost(clip.items);
+  h+='<p>Вставка: зданий <b>'+clip.items.length+'</b>. Стоимость:</p>'+costChips(cost)+'<div class="acts"><button class="btn" data-act="rotclip">Повернуть (R)</button>'+(lastPT!=='mouse'?'<button class="btn on" data-act="dopaste">Вставить</button>':'')+'<button class="btn" data-act="cancelclip">Отмена</button></div>';
+  el.innerHTML=h; el.hidden=false;
+  infoLive=()=>{for(const ch of el.querySelectorAll('.chip')){const k=ch.dataset.k,have=G.stock[k]||0;ch.classList.toggle('bad',have<cost[k]);ch.querySelector('i').textContent='/ '+have;}};
+  infoLive();
+}
 // ===== UI =====
 const $=id=>document.getElementById(id);
 const TOOLS=[
   {id:'select',name:'Курсор',key:'Q'},
   {id:'conveyor',key:'1'},{id:'drill',key:'2'},{id:'splitter',key:'3'},{id:'smelter',key:'4'},
   {id:'generator',key:'5'},{id:'pole',key:'6'},{id:'assembler',key:'7'},{id:'solar',key:'8'},{id:'sorter',key:'9'},{id:'teleporter',key:'0'},
-  {id:'erase',name:'Снос',key:'X'}
+  {id:'erase',name:'Снос',key:'X'},
+  {id:'area',name:'Выделение',key:'C'},{id:'paste',name:'Вставка',key:'V'}
 ];
 const SVG_SELECT='<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M9 5l14 9-6 1.5L19.5 24l-3 1.2-2.6-8.4L9 21z"/></svg>';
+const SVG_AREA='<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"><rect x="6" y="6" width="20" height="20" rx="2"/></svg>';
+const SVG_PASTE='<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="7" width="16" height="20" rx="2"/><path d="M12 7V5h8v2M12 14h8M12 19h8"/></svg>';
 const SVG_ERASE='<svg viewBox="0 0 32 32" fill="none" stroke="#ee6a55" stroke-width="3" stroke-linecap="round"><path d="M9 9l14 14M23 9L9 23"/></svg>';
 let aboutOpen=false, lastTch=0, hintOff=false, infoLive=null, toastTimer=0, hudSig='';
 
@@ -761,7 +856,7 @@ function toast(msg,kind){
 }
 function buildToolbar(){
   $('toolbar').innerHTML=TOOLS.map(t=>{
-    const icon=t.id==='select'?SVG_SELECT:t.id==='erase'?SVG_ERASE:'<img alt="" src="'+bldIcon(t.id)+'">';
+    const icon=t.id==='select'?SVG_SELECT:t.id==='erase'?SVG_ERASE:t.id==='area'?SVG_AREA:t.id==='paste'?SVG_PASTE:'<img alt="" src="'+bldIcon(t.id)+'">';
     const nm=t.name||BT[t.id].name;
     return '<button class="tool" data-tool="'+t.id+'" title="'+nm+'">'+icon+'<span class="tn">'+nm+'</span><span class="tk"></span></button>';
   }).join('');
@@ -770,13 +865,16 @@ function buildToolbar(){
 function refreshToolbar(){
   for(const b of $('toolbar').children){
     const id=b.dataset.tool, def=TOOLS.find(t=>t.id===id), lock=BT[id]&&!unlocked(id);
-    b.classList.toggle('on',id===tool); b.classList.toggle('locked',!!lock);
+    b.classList.toggle('on',id===tool); b.classList.toggle('locked',!!lock||(id==='paste'&&!clip));
     b.querySelector('.tk').textContent=lock?'УР '+BT[id].unlock:def.key;
   }
 }
 function setTool(id){
   if(BT[id]&&!unlocked(id)){toast('Откроется на уровне '+BT[id].unlock);return;}
+  if(id==='paste'&&!clip){toast('Буфер пуст. Выбери «Выделение», обведи рамкой и нажми «Копировать»');return;}
   tool=id; if(id!=='select') sel=null;
+  if(id!=='area') areaSel=null;
+  if(id==='paste'&&!hoverCell) hoverCell=toTile(W/2,H/2);
   refreshToolbar(); renderInfo();
 }
 function selectBld(b){sel=b;renderInfo();}
@@ -840,6 +938,7 @@ const ABOUT={
   solar:['Даёт: '+SOLAR_KW+' кВт без топлива.','Ничего не принимает и не выдаёт.'],
   teleporter:['Принимает: любые предметы.','Выдаёт: в телепорт с тем же номером канала, он выставляет предмет в соседнее здание.','Если в канале несколько телепортов, предметы идут по кругу. Без пары предметы не принимаются.']
 };
+for(const k in IOCFG) ABOUT[k].push('Стороны входа и выхода выбираются кнопками со стрелками в панели.');
 function aboutHtml(b){
   const d=BT[b.type], cost=Object.keys(d.cost).map(k=>ITEMS[k].name+' ×'+d.cost[k]).join(', ');
   return '<p>'+d.desc+'</p><ul>'+(ABOUT[b.type]||[]).map(x=>'<li>'+x+'</li>').join('')+'</ul>'+(cost?'<p class="dim">Стоимость: '+cost+'</p>':'');
@@ -851,6 +950,7 @@ function netText(b){
 function renderInfo(){
   const el=$('info'); infoLive=null; el.classList.remove('mini');
   if(tool==='erase'){el.hidden=true; return;}
+  if(tool==='area'||tool==='paste'){renderClipInfo(el); return;}
   if(tool!=='select'){
     const d=BT[tool];
     el.innerHTML=costChips(d.cost); el.classList.add('mini');
@@ -876,6 +976,8 @@ function renderInfo(){
     if(b.type==='teleporter'){
       h+='<div class="acts"><button class="btn" data-act="tdec">−</button><input id="tchin" type="number" min="1" max="999999" step="1" value="'+(b.ch+1)+'" aria-label="Номер канала" style="border-left:4px solid '+chColor(b.ch)+'"><button class="btn" data-act="tinc">+</button></div>';
     }
+    const io=IOCFG[b.type];
+    if(io) h+='<div class="iorow">'+(io.in?ioPad(b,'ins','in','Вход'):'')+(io.out?ioPad(b,'outs','out','Выход'):'')+'</div>';
     h+='<p class="rd" id="cont"></p>';
     h+='<div class="acts">';
     if(b.type==='conveyor'||b.type==='sorter') h+='<button class="btn" data-act="rotate">Повернуть (R)</button>';
@@ -898,6 +1000,13 @@ $('info').addEventListener('click',e=>{
   if(act==='close') selectBld(null);
   else if(act==='about'){aboutOpen=!aboutOpen;renderInfo();}
   else if(act==='hint'){hintOff=true;renderInfo();}
+  else if(act==='copy') copyArea(false);
+  else if(act==='cut') copyArea(true);
+  else if(act==='delarea'){for(const b of areaBlds()) removeBld(b); areaSel=null; renderInfo();}
+  else if(act==='cancelclip') setTool('select');
+  else if(act==='rotclip') rotateCmd();
+  else if(act==='dopaste') doPaste(hoverCell);
+  else if(act==='io'&&sel){sel[a.dataset.k]^=1<<(+a.dataset.v); renderInfo();}
   else if(act==='rotate') rotateCmd();
   else if(act==='remove'){if(sel){removeBld(sel);sel=null;renderInfo();}}
   else if(act==='recipe'&&sel){setRecipe(sel,a.dataset.v);renderInfo();}
@@ -911,6 +1020,7 @@ $('info').addEventListener('change',e=>{
 $('toolbar').addEventListener('click',e=>{const b=e.target.closest('.tool');if(b)setTool(b.dataset.tool);});
 
 function rotateCmd(){
+  if(tool==='paste'){clipRot=(clipRot+1)&3;return;}
   if(tool==='conveyor'||tool==='sorter') rot=(rot+1)&3;
   else if(sel&&(sel.type==='conveyor'||sel.type==='sorter')) sel.dir=(sel.dir+1)&3;
 }
@@ -997,6 +1107,8 @@ cv.addEventListener('pointerdown',e=>{
   if(e.button===1||e.button===2){mode='pan';return;}
   if(tool==='select'){mode='click';return;}
   if(tool==='erase'){mode='erase';eraseAt(hoverCell);return;}
+  if(tool==='area'){mode='area';areaSel={x0:hoverCell[0],y0:hoverCell[1],x1:hoverCell[0],y1:hoverCell[1]};renderInfo();return;}
+  if(tool==='paste'){mode='paste';return;}
   mode='build'; dragFail=false; lastCell=null; buildTo(hoverCell);
 });
 cv.addEventListener('pointermove',e=>{
@@ -1013,14 +1125,17 @@ cv.addEventListener('pointermove',e=>{
   else if(mode==='pan'){cam.x-=dx/cam.z;cam.y-=dy/cam.z;}
   else if(mode==='build') buildTo(hoverCell);
   else if(mode==='erase') eraseAt(hoverCell);
+  else if(mode==='area'&&areaSel){areaSel.x1=hoverCell[0];areaSel.y1=hoverCell[1];}
 });
 function endPtr(e){
   const p=ptrs.get(e.pointerId); ptrs.delete(e.pointerId);
   if(p){
     if(mode==='click'&&!p.moved&&e.type==='pointerup') clickAt(p);
+    if(mode==='area') renderInfo();
+    if(mode==='paste'&&e.type==='pointerup'&&e.pointerType==='mouse') doPaste(hoverCell);
     if(mode==='pan'&&p.btn===2&&!p.moved&&tool!=='select') setTool('select');
   }
-  if(e.pointerType!=='mouse') hoverCell=null;
+  if(e.pointerType!=='mouse'&&tool!=='paste') hoverCell=null;
   if(ptrs.size===0) mode='none'; else if(mode==='pinch'&&ptrs.size===1) mode='ignore';
 }
 cv.addEventListener('pointerup',endPtr);
@@ -1029,17 +1144,26 @@ cv.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse'&&!ptrs.size)ho
 cv.addEventListener('wheel',e=>{
   e.preventDefault(); const p=pos(e); zoomAt(p.x,p.y,Math.exp(-e.deltaY*0.0015));
 },{passive:false});
+addEventListener('pointerdown',e=>{lastPT=e.pointerType;},true);
 addEventListener('keydown',e=>{
-  if(e.ctrlKey||e.metaKey||e.altKey) return;
   if(e.target&&e.target.tagName==='INPUT') return;
+  if(e.ctrlKey||e.metaKey){
+    if(e.code==='KeyC'&&tool==='area'&&areaSel){copyArea(false);e.preventDefault();}
+    else if(e.code==='KeyX'&&tool==='area'&&areaSel){copyArea(true);e.preventDefault();}
+    else if(e.code==='KeyV'){setTool('paste');e.preventDefault();}
+    return;
+  }
+  if(e.altKey) return;
   keys.add(e.code);
   if(e.repeat) return;
   const c=e.code;
   if(c==='KeyR') rotateCmd();
   else if(c==='KeyQ'||c==='Escape') setTool('select');
   else if(c==='KeyX') setTool('erase');
-  else if(c==='Digit0') setTool('teleporter');
-  else if(/^Digit[1-9]$/.test(c)) setTool(TOOLS[+c.slice(5)].id);
+  else if(c==='KeyC') setTool('area');
+  else if(c==='KeyV') setTool('paste');
+  else if(/^Digit[0-9]$/.test(c)){const tt=TOOLS.find(q=>q.key===c.slice(5)); if(tt) setTool(tt.id);}
+  else if((c==='Delete'||c==='Backspace')&&tool==='area'&&areaSel){for(const b of areaBlds()) removeBld(b); areaSel=null; renderInfo();}
   else if((c==='Delete'||c==='Backspace')&&sel&&tool==='select'){removeBld(sel);sel=null;renderInfo();}
 });
 addEventListener('keyup',e=>keys.delete(e.code));
